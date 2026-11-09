@@ -1,0 +1,19 @@
+# Copy to terraform.tfvars and set at least project_id and grafana_admin_password.
+# Everything else has a working default - see variables.tf for the full list.
+
+project_id = "dstepanov-gke-platform"
+
+# Grafana admin password. Keep this out of version control: either put it in a
+# terraform.tfvars that .gitignore excludes, or export TF_VAR_grafana_admin_password
+# in the shell before `terraform apply`.
+grafana_admin_password = "REPLACE_ME"
+
+# Optional overrides (shown here with their defaults):
+# region                = "us-west1"
+# zone                  = "us-west1-a"
+# cluster_name          = "gpu-observability-demo"
+# release_channel       = "REGULAR"
+# gpu_machine_type      = "g2-standard-8"
+# gpu_accelerator_type  = "nvidia-l4"
+# gpu_node_count        = 1
+# gpu_spot              = true
