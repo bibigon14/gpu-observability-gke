@@ -46,7 +46,7 @@ spec:
             - --dtype=bfloat16
             # L4 has 24 GB vs T4's 16 GB, so we can carry a longer context than the
             # EKS mirror (which runs at 2048 on T4). 4096 is comfortable headroom.
-            - --max-model-len=4096
+            - --max-model-len=2048
             - --gpu-memory-utilization=0.90
             - --port=8000
           ports:

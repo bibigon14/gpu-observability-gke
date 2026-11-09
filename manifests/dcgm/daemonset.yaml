@@ -1,0 +1,164 @@
+# DCGM exporter for GKE Container-Optimized OS.
+#
+# Why this is a raw manifest, not the NVIDIA Helm chart:
+#
+# The nvidia/dcgm-exporter chart 4.8.4 hard-codes a securityContext with
+# allowPrivilegeEscalation:false and capabilities.drop:[ALL]. GKE COS with the
+# auto-installed driver uses CDI, not NVIDIA_VISIBLE_DEVICES, so the DCGM pod
+# cannot see /dev/nvidia* without privileged:true. The chart cannot mix those
+# two because K8s itself rejects:
+#   "cannot set allowPrivilegeEscalation to false and privileged to true"
+#
+# The dcgm-exporter chart silently assumes AL2023/host-driver layouts and
+# falls over on GKE. Owning the spec here is simpler than fighting the chart.
+#
+# What this manifest does differently:
+#   1. privileged:true - needed for /dev/nvidia* under GKE's CDI runtime
+#   2. hostPath mounts GKE's driver dir (/home/kubernetes/bin/nvidia) and /dev
+#   3. LD_LIBRARY_PATH points at the mounted libs
+#   4. No nvidia.com/gpu resource request - DCGM must NOT allocate the single
+#      L4; vLLM takes it exclusively. DCGM reads device state through NVML
+#      without a scheduler allocation thanks to privileged + /dev bind mount
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gpu-stack
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dcgm-exporter
+  namespace: gpu-stack
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: dcgm-exporter
+  namespace: gpu-stack
+  labels:
+    app.kubernetes.io/name: dcgm-exporter
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dcgm-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dcgm-exporter
+    spec:
+      serviceAccountName: dcgm-exporter
+      nodeSelector:
+        workload-type: gpu
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: "present"
+          effect: NoSchedule
+        - key: cloud.google.com/gke-spot
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      hostPID: true
+      containers:
+        - name: exporter
+          image: nvcr.io/nvidia/k8s/dcgm-exporter:4.6.1-4.8.4-distroless
+          env:
+            - name: LD_LIBRARY_PATH
+              value: /usr/local/nvidia/lib64
+            - name: DCGM_EXPORTER_LISTEN
+              value: ":9400"
+            - name: DCGM_EXPORTER_KUBERNETES
+              value: "true"
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            # Point DCGM at the Spot-safe counters file mounted below, so the
+            # profiling fields that crash on Spot L4 are never requested.
+            - name: DCGM_EXPORTER_COLLECTORS
+              value: /etc/dcgm-exporter/counters.csv
+          ports:
+            - name: metrics
+              containerPort: 9400
+              protocol: TCP
+          securityContext:
+            privileged: true
+            runAsUser: 0
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: nvidia
+              mountPath: /usr/local/nvidia
+              readOnly: true
+            - name: dev
+              mountPath: /dev
+            - name: pod-resources
+              mountPath: /var/lib/kubelet/pod-resources
+              readOnly: true
+            - name: counters
+              mountPath: /etc/dcgm-exporter
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 30
+            periodSeconds: 20
+      volumes:
+        - name: nvidia
+          hostPath:
+            path: /home/kubernetes/bin/nvidia
+        - name: dev
+          hostPath:
+            path: /dev
+        - name: pod-resources
+          hostPath:
+            path: /var/lib/kubelet/pod-resources
+        - name: counters
+          configMap:
+            name: dcgm-exporter-counters
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dcgm-exporter
+  namespace: gpu-stack
+  labels:
+    app.kubernetes.io/name: dcgm-exporter
+spec:
+  selector:
+    app.kubernetes.io/name: dcgm-exporter
+  ports:
+    - name: metrics
+      port: 9400
+      targetPort: metrics
+      protocol: TCP
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dcgm-exporter
+  namespace: gpu-stack
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dcgm-exporter
+  endpoints:
+    - port: metrics
+      interval: 30s
+      scrapeTimeout: 20s
+      honorLabels: true

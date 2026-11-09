@@ -60,9 +60,9 @@ variable "gpu_node_count" {
 }
 
 variable "gpu_min_node_count" {
-  description = "Minimum GPU nodes when autoscaling. 0 lets the pool scale to zero when idle - but note GKE still charges for the instance until the autoscaler collects it (~10 min)."
+  description = "Minimum GPU nodes when autoscaling. 1 pins the node because with min=0 the autoscaler marks an underutilized GPU node as DeletionCandidate within ~10 min of the DaemonSet not scheduling, which kills the demo. Set 0 if intentionally running a scale-to-zero batch pattern."
   type        = number
-  default     = 0
+  default     = 1
 }
 
 variable "gpu_max_node_count" {

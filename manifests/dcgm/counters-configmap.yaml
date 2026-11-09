@@ -1,0 +1,45 @@
+# Custom DCGM counters file for GKE L4 Spot.
+#
+# The chart's default counters set includes profiling (DCP) fields like
+# DCGM_FI_PROF_GR_ENGINE_ACTIVE, DCGM_FI_DEV_DRAM_ACTIVE, PCIE_TX/RX_BYTES.
+# On a GKE Spot L4 the DCGM profiling module fails to initialize ("The
+# third-party Profiling module returned an unrecoverable error"), which makes
+# DCGM refuse to start the whole collector and the pod enters CrashLoop.
+#
+# This counters set drops every profiling field and keeps only the regular
+# NVML-backed metrics that work on Spot L4 without persistence mode. We lose
+# the tensor-active vs gpu-util gap panel (the EKS repo's headline shot) but
+# keep the allocated-vs-idle picture, which is what the GPUAllocatedButIdle
+# alert depends on (framebuffer memory in use + near-zero GPU utilization).
+#
+# If the node pool is recreated without Spot, swap this ConfigMap out and
+# the DaemonSet picks up the full default set again.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dcgm-exporter-counters
+  namespace: gpu-stack
+data:
+  counters.csv: |
+    # Format,,
+    # If line starts with a '#' it is considered a comment,,
+    # DCGM_FIELD_ID, Prometheus_metric_type, help_text
+    DCGM_FI_DEV_SM_CLOCK, gauge, SM clock frequency (in MHz).
+    DCGM_FI_DEV_MEM_CLOCK, gauge, Memory clock frequency (in MHz).
+    DCGM_FI_DEV_MEMORY_TEMP, gauge, Memory temperature (in C).
+    DCGM_FI_DEV_GPU_TEMP, gauge, GPU temperature (in C).
+    DCGM_FI_DEV_POWER_USAGE, gauge, Power draw (in W).
+    DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION, counter, Total energy consumption since boot (in mJ).
+    DCGM_FI_DEV_PCIE_REPLAY_COUNTER, counter, Total number of PCIe retries.
+    DCGM_FI_DEV_GPU_UTIL, gauge, GPU utilization (in %).
+    DCGM_FI_DEV_MEM_COPY_UTIL, gauge, Memory utilization (in %).
+    DCGM_FI_DEV_ENC_UTIL, gauge, Encoder utilization (in %).
+    DCGM_FI_DEV_DEC_UTIL , gauge, Decoder utilization (in %).
+    DCGM_FI_DEV_XID_ERRORS, gauge, Value of the last XID error encountered.
+    DCGM_FI_DEV_FB_FREE, gauge, Framebuffer memory free (in MiB).
+    DCGM_FI_DEV_FB_USED, gauge, Framebuffer memory used (in MiB).
+    DCGM_FI_DEV_VGPU_LICENSE_STATUS, gauge, vGPU License status.
+    DCGM_FI_DEV_UNCORRECTABLE_REMAPPED_ROWS, counter, Number of remapped rows for uncorrectable errors.
+    DCGM_FI_DEV_CORRECTABLE_REMAPPED_ROWS, counter, Number of remapped rows for correctable errors.
+    DCGM_FI_DEV_ROW_REMAP_FAILURE, gauge, Whether remapping of rows has failed.
+    DCGM_FI_DRIVER_VERSION, label, Driver Version.

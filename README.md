@@ -33,6 +33,38 @@ reserved, a workload resident, engines doing nothing. On a fleet of A100s or
 H100s that gap is burned money. This project makes it visible and alerts on
 it.
 
+## The gap, on a live L4
+
+Both captured from the shipped Grafana dashboard against a real `g2-standard-8`
+(one NVIDIA L4, 24 GB), with vLLM serving `facebook/opt-1.3b`.
+
+**Allocated but idle** - vLLM resident in 19.6 GB of framebuffer (the full
+`gpu_memory_utilization=0.9` reservation for weights plus KV cache), every
+engine flat at zero. One whole L4 held hostage: the exact state the
+`GPUAllocatedButIdle` alert fires on.
+
+![GPU allocated but idle](docs/screenshots/01-idle.png)
+
+**Under load** - the same card driven by 20 concurrent inference streams.
+Framebuffer did not change (same KV cache), but **`GPU utilization` climbed
+to 87%**, **power draw jumped from 38 W to 70.5 W** (near the L4's 72 W TDP),
+and **vLLM pushed ~1000 generation tokens/sec**. The point of the two shots
+side by side: "allocation" tells you nothing about "work" - `FB_USED` barely
+moves between the two states, but every real signal (power, temperature,
+throughput, engine activity) swings by an order of magnitude. That gap is
+what a GPU observability stack has to make legible.
+
+![GPU under load](docs/screenshots/02-under-load.png)
+
+| metric                   | idle    | under load | delta       |
+|--------------------------|---------|------------|-------------|
+| `DCGM_FI_DEV_FB_USED`    | 19.6 GB | 19.6 GB    | unchanged   |
+| `DCGM_FI_DEV_GPU_UTIL`   | 0%      | 87%        | +87pp       |
+| `DCGM_FI_DEV_POWER_USAGE`| 38 W    | 70.5 W     | +32 W (near TDP) |
+| `DCGM_FI_DEV_GPU_TEMP`   | 65 C    | 77 C       | +12 C       |
+| `vllm:generation_tokens_total` rate | 0 tok/s | ~1000 tok/s | +1000 tok/s |
+| `vllm:num_requests_running`         | 0       | ~20         | +20         |
+
 ## Architecture
 
 GKE in `us-west1`, zonal (one control plane, cheap for a demo), two node
@@ -119,9 +151,25 @@ The GPU pool is Spot by default (~60-80% cheaper); flip
 
 ## Status
 
-**v0.1** (scaffold in flight): Terraform brings up the cluster, both node
-pools, kube-prometheus-stack, and DCGM exporter. GPU quota already approved
-in us-west1.
+**v0.1** shipped 2026-11-08. Terraform brings up the cluster, both node
+pools, kube-prometheus-stack; raw DaemonSet manifests ship DCGM exporter
+and vLLM. Captured the money-shot pair (idle / under load) on a real L4
+Spot in us-west1-a with ~1000 tok/s under 20 concurrent streams. Full
+apply/demo/destroy cycle cost under $2.
+
+**Known GKE-vs-EKS gotchas documented in code comments:**
+- NVIDIA DCGM Helm chart hard-codes a securityContext that conflicts with
+  GKE COS's CDI runtime; this project ships DCGM as a raw DaemonSet with
+  the escape hatches (`privileged: true`, hostPath on `/home/kubernetes/bin/nvidia`,
+  LD_LIBRARY_PATH to the mounted libs) rather than vendoring the chart.
+- GKE auto-applies a ResourceQuota that blocks the system-node-critical
+  PriorityClass outside kube-system; cleared it in the DaemonSet spec.
+- DCGM profiling fields (DCP) fail to initialize on Spot L4 without
+  persistence mode; a custom counters.csv keeps only the regular NVML
+  fields that work. The tensor-active vs gpu-util gap panel from the EKS
+  mirror is deferred to a non-Spot run.
+- GKE Cluster Autoscaler marks a GPU node with min=0 as DeletionCandidate
+  within ~10 min if no pod schedules; pinned min_node_count=1 for demos.
 
 **Up next** (mirroring the EKS repo's shipped v0.2 - v0.5):
 
