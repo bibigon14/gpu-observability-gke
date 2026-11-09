@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  namespace: workloads
+  labels:
+    app: vllm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm
+  template:
+    metadata:
+      labels:
+        app: vllm
+    spec:
+      # Kubernetes injects legacy per-Service env vars (e.g. VLLM_PORT=tcp://<ip>:8000
+      # for the Service named "vllm"). vLLM reads VLLM_PORT as an integer port and
+      # crashes on that value, so disable the auto-injected service links.
+      enableServiceLinks: false
+      # Land on the GPU pool and tolerate GKE's auto-added taint.
+      # Note: on EKS this toleration value is "true"; on GKE it is "present".
+      # GKE sets nvidia.com/gpu=present:NoSchedule automatically on any GPU node.
+      nodeSelector:
+        workload-type: gpu
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: "present"
+          effect: NoSchedule
+        # cloud.google.com/gke-spot:NoSchedule is added on Spot nodes.
+        - key: cloud.google.com/gke-spot
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:v0.6.3
+          args:
+            # Small open model, no HF auth required. opt-1.3b fits in ~3 GB of a
+            # 24 GB L4 with plenty of KV-cache headroom.
+            - --model=facebook/opt-1.3b
+            # L4 is Ada Lovelace (supports bf16). Prefer bf16 over fp16: same memory
+            # footprint, wider exponent range, numerically more stable.
+            - --dtype=bfloat16
+            # L4 has 24 GB vs T4's 16 GB, so we can carry a longer context than the
+            # EKS mirror (which runs at 2048 on T4). 4096 is comfortable headroom.
+            - --max-model-len=4096
+            - --gpu-memory-utilization=0.90
+            - --port=8000
+          ports:
+            - name: http
+              containerPort: 8000
+          resources:
+            limits:
+              # One whole GPU. L4 supports MIG partitioning but we use the full card
+              # for this demo so the allocated-but-idle signal is meaningful.
+              nvidia.com/gpu: 1
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            # Model download + load into VRAM is slow on first cold start.
+            initialDelaySeconds: 90
+            periodSeconds: 10
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 180
+            periodSeconds: 20

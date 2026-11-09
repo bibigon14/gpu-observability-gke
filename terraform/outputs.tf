@@ -1,3 +1,8 @@
+output "project_id" {
+  description = "GCP project ID, echoed for the Makefile's kubeconfig target."
+  value       = var.project_id
+}
+
 output "cluster_name" {
   description = "GKE cluster name."
   value       = google_container_cluster.main.name

@@ -1,0 +1,17 @@
+# kubectl apply -k manifests/
+#
+# Brings up the whole workload layer in one command once the Terraform
+# cluster + monitoring stack is Ready. Order of resources:
+#   1. workloads namespace
+#   2. vLLM Deployment + Service + ServiceMonitor
+#   3. PrometheusRule objects for serving + GPU alerts (land in the monitoring ns)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- vllm/00-namespace.yaml
+- vllm/deployment.yaml
+- vllm/service.yaml
+- vllm/servicemonitor.yaml
+- alerts/vllm-serving-alerts.yaml
+- alerts/gpu-idle-alert.yaml
