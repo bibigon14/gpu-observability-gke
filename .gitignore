@@ -24,3 +24,6 @@ terraform.rc
 # Local secrets
 .envrc
 .env
+
+# Terraform plan files
+*.tfplan
